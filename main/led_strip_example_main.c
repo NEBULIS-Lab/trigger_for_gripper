@@ -9,19 +9,30 @@
 #include "esp_log.h"
 #include "driver/rmt_tx.h"
 #include "led_strip_encoder.h"
+
 #include "driver/gpio.h"
+
+#include "driver/adc.h"
+#include "esp_adc/adc_oneshot.h"
 
 #define RMT_LED_STRIP_RESOLUTION_HZ 10000000 // 10MHz resolution, 1 tick = 0.1us (led strip needs a high resolution)
 #define RMT_LED_STRIP_GPIO_NUM      3
 
 #define EXAMPLE_LED_NUMBERS         1
-#define EXAMPLE_CHASE_SPEED_MS      100
+#define EXAMPLE_CHASE_SPEED_MS      10
 
 // static const char *TAG = "example";
 
 static uint8_t led_strip_pixels[EXAMPLE_LED_NUMBERS * 3];
 
 #define BUTTON_GPIO_PIN GPIO_NUM_1
+
+#define ADC_UNIT        ADC_UNIT_1
+#define ADC_CHANNEL     ADC_CHANNEL_0
+#define ADC_ATTEN          ADC_ATTEN_DB_12
+#define ADC_BITWIDTH       ADC_BITWIDTH_DEFAULT
+
+static adc_oneshot_unit_handle_t adc_handle;
 
 void button_input_init(void)
 {
@@ -34,6 +45,21 @@ void button_input_init(void)
     };
 
     gpio_config(&io_conf);
+}
+static void adc_init(void)
+{
+    adc_oneshot_unit_init_cfg_t init_config = {
+        .unit_id = ADC_UNIT,
+    };
+
+    ESP_ERROR_CHECK(adc_oneshot_new_unit(&init_config, &adc_handle));
+
+    adc_oneshot_chan_cfg_t config = {
+        .bitwidth = ADC_BITWIDTH,
+        .atten = ADC_ATTEN,
+    };
+
+    ESP_ERROR_CHECK(adc_oneshot_config_channel(adc_handle, ADC_CHANNEL, &config));
 }
 
 void app_main(void)
@@ -70,13 +96,17 @@ void app_main(void)
         .loop_count = 0, // no transfer loop
     };
     button_input_init();
+    adc_init();
+    int adc_raw = 0;
     while (1) {
-        led_strip_pixels[0] = 255; //green
-        led_strip_pixels[1] = 0; //red
-        led_strip_pixels[2] = 0; //blue
+        
         // printf("R: %ld, G: %ld, B: %ld\n", red, green, blue);
         int level = gpio_get_level(GPIO_NUM_1);
-        printf("Button level: %d\n", level);
+        ESP_ERROR_CHECK(adc_oneshot_read(adc_handle, ADC_CHANNEL, &adc_raw));
+        printf("Button level: %d, ADC raw: %d\n", level, adc_raw);
+        led_strip_pixels[0] = (uint8_t)255*(4096-adc_raw)/4096.0; //green
+        led_strip_pixels[1] = (uint8_t)255*adc_raw/4096.0; //red
+        led_strip_pixels[2] = 0; //blue
         // Flush RGB values to LEDs
         ESP_ERROR_CHECK(rmt_transmit(led_chan, led_encoder, led_strip_pixels, sizeof(led_strip_pixels), &tx_config));
         ESP_ERROR_CHECK(rmt_tx_wait_all_done(led_chan, portMAX_DELAY));
